@@ -1,0 +1,461 @@
+---
+title: "Fragile State Index Research"
+author: "R. Agustin, A. Brun, S. Gómez, S. Torres"
+date: "`r format(Sys.time(), '%d %B %Y')`"
+output: rmdformats::readthedown
+---
+
+```{r,echo=FALSE, out.width="50%",fig.align="center"}
+knitr::include_graphics("logoPUCP.png")
+```
+
+<style>
+#sidebar {
+  background: #1A218F;
+}
+</style>
+
+
+# Planteamiento de la pregunta de investigación 
+
+El presente trabajo buscar responder a la siguiente pregunta de investigación:
+
+¿Cómo se organizan los países según el Índice de Fragilidad Estatal?
+ 
+
+## Metodología
+
+Nuestra investigación emplea la base de datos del Índice de Estados Frágiles (FSI), el cúal corresponde a una clasificación anual actualizada para el 2022 de 178 países en función a los tipos de presiones que enfrentan y su repercusión en términos de nivel de fragilidad. Dicho índice se encuentra basado en el sistema de evaluación de conflictos propiedad de Fund for Peace, un enfoque analítico y una metodología de las ciencias sociales. En este sentido, se nutre de tres flujos principales de datos: validación cuantitativa, cualitativa y de expertos.
+
+Asimismo, los puntajes obtenidos se distribuyen para cada país en base a doce indicadores que son el resultado de años de experiencia social experta investigación científica.
+
+Este índice de Estados Frágiles indica que, si el país obtiene un puntaje alto en el índice de fragilidad, es frágil. En cambio, si se obtiene un índice de fragilidad bajo, esto quiere decir que el país tendrá menor fragilidad. Los puntajes del índice están estandarizados del 0 al 30, de menor a mayor fragilidad.
+
+Los factores a ser utilizados en este trabajo son los siguientes: Cohesión, Economía, Política y Social.
+
+```{r,echo=FALSE, out.width="2000%",fig.align="center"}
+knitr::include_graphics("indicadores_fsi.png")
+```
+
+Finalmente, para responder esta pregunta se plantea realizar tres procedimientos estadísticos: un análisis factorial confirmatorio para corroborar para corroborar que los indicadores se pueden agrupar en cuatro grupos (cohesión, economía, política y social), un análisis de clusters jerárquico para agrupar a los países según dichos indicadores y finalmente una prueba de anova para determinar si la diferencia de medias entre los grupos (clusters) de países según su nivel de inestabilidad es estadísticamente significativa.
+
+
+# Preparación de data 
+
+Cargamos las librerías necesarias para el análisis
+
+```{r message=FALSE, warning=FALSE}
+library(DescTools)
+library(dplyr)
+library(factoextra)
+library(ggcorrplot)
+library(ggplot2)
+library(lavaan)
+library(NbClust)
+library(polycor)
+library(psych)
+library(rio)
+library(semPlot)
+library(sf)
+```
+
+### Importamos la data y seleccionamos las variables de interés
+
+```{r message=FALSE, warning=FALSE}
+data <- import("fsi-2022-download.xlsx")
+```
+
+```{r message=FALSE, warning=FALSE}
+data1 <- data[, c(1, 4:16)]
+```
+### Renombramos países específicos para una mayor facilidad de análisis
+
+```{r}
+data1$Country[data1$Country == 'United States'] <- 'United States of America' 
+```
+
+```{r}
+data1$Country[data1$Country == 'Congo Democratic Republic'] <- 'Democratic Republic of the Congo'
+```
+
+```{r}
+data1$Country[data1$Country == 'Congo Republic'] <- 'Republic of the Congo' 
+```
+
+```{r}
+data1$Country[data1$Country == 'Czechia'] <- 'Czech Republic'
+```
+
+```{r}
+data1$Country[data1$Country == "Côte d'Ivoire"] <- 'Ivory Coast'
+```
+
+
+### Renombramos las variables de interés para una mayor facilidad del análisis
+
+```{r}
+data2 = rename(data1, C1="C1: Security Apparatus", C2="C2: Factionalized Elites", C3="C3: Group Grievance", E1="E1: Economy", E2="E2: Economic Inequality", E3="E3: Human Flight and Brain Drain", P1="P1: State Legitimacy", P2="P2: Public Services", P3="P3: Human Rights", S1="S1: Demographic Pressures", S2="S2: Refugees and IDPs", X1="X1: External Intervention")
+
+names(data2)
+```
+
+
+# Paso 1: Análisis factorial confirmatorio
+
+El Fragile State Index ya plantea una distribución determinada de factores en base a las variables de la data. Debido a ello, se realizará un análisis factorial confirmatorio, para corroborar que lo planteado por Fund for Peace en su estudio es, efectivamente, adecuado. De esta manera, se indicará qué variables conforman cada factor y se construirá un modelo con la data.
+
+## Calculo matriz de correlaciones
+
+La matriz de correlacion nos va a indicar qué tan cerca o qué tan lejos está un caso de otro. Se calcula para tener una idea sobre la existencia de grupos de variables que estén correlacionadas.
+
+```{r}
+data2.5 = data2[3:14]
+
+corMatrix=polycor::hetcor(data2.5)$correlations
+corMatrix
+```
+
+```{r}
+ggcorrplot(corMatrix,colors = c("#ff0000", "white", "#0000ff"))
+```
+
+### Diagnóstico previo
+
+#### a) Prueba de KMO
+
+```{r}
+psych::KMO(data2.5)
+```
+
+Lo que se busca con esta prueba es que, en general, el MSA sea lo más cercano a 1 para poder realizar el análisis factorial. Lo que se puede ver en este caso es que el MSA = 0.92, lo cual quiere decir que los datos tienen un nivel de idoneidad muy bueno para realizar el análisis factorial.
+
+#### b) Prueba de Bartlett
+
+```{r}
+cortest.bartlett(corMatrix,n=nrow(data2.5))
+```
+La hipótesis nula de esta prueba es que la Matriz de correlación de esta selección de datos es una Matriz Identidad. Como el p-value de la prueba = 0, lo cual es menor a 0.05, se rechaza la H0. Esto quiere decir que la Matriz de corrrelación es distinta a la Matriz Identidad, es decir, es factorizable. 
+
+En conclusión, con los resultados de las dos pruebas realizadas (KMO Y Bartlett) hemos comprobado que sí se puede dar el Análisis Factorial Confirmatorio.
+
+### Creamos un objeto que contenga las variables por adelantado
+
+```{r message=FALSE, warning=FALSE}
+Modelo_confir = "Cohesion =~ C1 + C2 + C3
+                 Economic =~ E1 + E2 + E3
+                 Political =~ P1 + P2 + P3
+                 Social =~ S1 + S2 + X1"
+Modelo_confir
+```
+
+### Creamos un modelo para revisar las variables latentes
+
+```{r message=FALSE, warning=FALSE}
+modelo=cfa(Modelo_confir, data=data2)
+summary(modelo,fit.measures=TRUE)
+```
+
+A continuación, se observan los p-value de las variables en el modelo confirmatorio que ha sido construido. Como los p-values de todas las variables son menores a 0.05, se determina que cada variable aporta significativamente a los factores. Posteriormente, se muestra gráficamente cómo y con qué carga factorial las variables aportan a los factores.
+
+### Visualizamos las variables
+
+```{r}
+semPaths(modelo, intercepts = FALSE,edge.label.cex=1.5, optimizeLatRes = TRUE, groups = "lat",pastel = TRUE, exoVar = FALSE, sizeInt=5,edge.color ="black",esize = 6, label.prop=2,sizeLat = 6,"std", layout="circle2")
+```
+
+## Interpretación del análisis factorial confirmatorio:
+
+A través del análisis confirmatorio, podemos concluir que el conjunto de factores creados (Cohesión, Economía, Política y Social) son los adecuados para el trabajo de análisis que se plantea realizar. Como se puede observar a partir de la tabla de Latent Variables y los p-value (que presentan valores menores a 0.05), todas las variables aportar a sus respectivos factores de manera significativa. Así, se ha comprobado que los 12 indicadores efectivamente se pueden reducir a dichas variables latentes.
+
+
+#### Por último, se procede a crear los cuatro indices y se agregan a la base de datos para realizar el análisis de clusters.
+
+```{r message=FALSE, warning=FALSE}
+data3 <- mutate(data2, Cohesion =  C1 + C2 + C3) %>%
+         mutate(., Economia = E1 + E2 + E3) %>%
+         mutate(., Politica = P1 + P2 + P3) %>%
+         mutate(., Social = S1 + S2 + X1) 
+```
+
+```{r message=FALSE, warning=FALSE}
+data3 <- as.data.frame(data3)
+```
+
+
+# Paso 2: Análisis de Clusters
+
+Para saber cómo se organizan los países, es necesario realizar un Análisis de Cluster pues este nos permite organizar casos de acuerdo con las características similares que tengan. Para este trabajo, analizaremos cómo se pueden agrupar los países según los cuatro índices creados (Cohesión, Economía, Política y Social).
+
+## Preparación de la data
+
+Para el análisis de clusters se introducirán las etiquetas de los países y se eliminará la primera columna (para evitar redundancia y trabajar solo con variables numéricas).
+
+
+```{r message=FALSE, warning=FALSE}
+rownames(data3) <- data3[,1]
+```
+
+Se construye un subset con las variables de interés (Columna 15 a 18)
+
+```{r message=FALSE, warning=FALSE}
+data4 <- data3[15:18]
+```
+
+
+## Cálculo de cluster
+
+```{r message=FALSE, warning=FALSE}
+resnumclust <- NbClust(data4, distance = "euclidean", min.nc= 2, max.nc= 10, 
+                       method = "ward.D")
+```
+
+Como podemos observar, se nos recomienda emplear tres clusters.
+
+
+## Construimos y observamos el dendograma
+
+```{r message=FALSE, warning=FALSE}
+res1 <- hcut(data4, k = 3, stand = TRUE, hc_method = "ward.D")
+fviz_dend(res1, rect = T, cex = 0.4)
+```
+
+## Graficamos los clusters
+
+```{r message=FALSE, warning=FALSE}
+fviz_cluster(res1, data = data4)
+```
+
+## Analizamos las caracteristicas de los grupos
+
+```{r message=FALSE, warning=FALSE}
+clust_car=data4 %>%
+  mutate(Cluster = res1$cluster) %>%
+  group_by(Cluster) %>%
+  summarise_all("mean")
+clust_car
+```
+
+## Interpretación
+
+De acuerdo a los nuevos gráficos y tabla de características de los grupos de países según su nivel de fragilidad estatal, podemos apreciar ciertas diferencias entre los promedios dependiendo el cluster al que pertenecen. El primer cluster agrupa a los países de  nivel alto de fragilidad estatal, el segundo cluster agrupa a aquellos con un nivel intermedio de fragilidad estatal y finalmente el tercer cluster agrupa aquellos países con un nivel bajo de fragilidad estatal. 
+
+En primer lugar, los países ubicados en el cluster de nivel de fragilidad estatal alto poseen puntajes altos de riesgo en los cuatro indicadores. Particularmente, poseen un puntaje promedio de 24. 47 puntos para el indicador de cohesión, de 22.31 puntos para el indicador de economía, de 24.82 puntos para el indicador político y de 24.28 puntos para el indicador social. En este sentido, el perfil de dichos países corresponde a casos con un nivel alto de fragmentación social, desigualdad económica y mayores niveles de pobreza, muy bajos niveles de legitimidad o confianza estatal y un relativo alto nivel de influencia de factores externos o internacionales en cuestiones domésticas.
+
+En segundo lugar, los países ubicados en el cluster de nivel de fragilidad estatal intermedio poseen un puntaje promedio de 18.83 puntos para el indicador de cohesión, de 17.18 puntos para el indicador de economía, de 18.87 puntos para el indicador político y de 16.46 puntos para el indicador social. Por ende, el perfil de dichos países corresponde a aquellos con un menor nivel de fragmentación social (particularmente por clivajes étnicos o culturales), presencia de desigualdad económica a pesar de contar con recursos naturales, bajos niveles de legitimidad o confianza estatal y nivel intermedio de influencia de factores externos o internacionales en cuestiones domésticas.
+
+Finalmente, los países ubicados en el cluster de nivel de fragilidad estatal bajo poseen puntajes altos de riesgo en los cuatro indicadores. Particularmente, poseen un puntaje promedio de 10.33 puntos para el indicador de cohesión, de 10.38 puntos para el indicador de economía, de 8.11 puntos para el indicador político y de 9.30 puntos para el indicador social. En este sentido, el perfil de dichos países corresponde a un grupo que goza de una relativa estabilidad en el aparato de seguridad y entre las élites. Asimismo, poseen pocas diferencias entre oportunidades para el desarrollo económico y un relativamente estable nivel de bienestar económico. Además, son percibe un alto respeto a la ley y un gran alcance y calidad de servicio públicos. Finalmente, dichos países poseen una relativa estabilidad tanto en su política exterior como en la decisión respecto a dimensiones domésticas relacionadas a factores externos. 
+
+Con los resultados encontrados y dada la diferencia entre los promedios encontrados entre clusters, podemos concluir que dichas variables (indicadores) son significativos. En este sentido, quedaría pendiente confirmar ello mediante una prueba de Anova. 
+
+## Finalmente, agregamos los clusters generados a la base de datos
+
+```{r message=FALSE, warning=FALSE}
+data3$cluster=as.factor(res1$cluster)
+```
+
+## Descarte de otras opciones
+
+Con el objetivo de esclarecer posibles diferencias en la construcción de clusters, usaremos las variables en sí mismas para la construcción de un número distinto de clusters y así verificar la idoneidad o no del análisis anteriormente planteado (en base a los factores).
+
+
+```{r message=FALSE, warning=FALSE}
+data3.1 <- as.data.frame(data2)
+```
+
+Quitamos la primera columna para trabajar solo con variables numéricas
+
+```{r message=FALSE, warning=FALSE}
+rownames(data3.1) <- data3.1[,1]
+```
+
+Se construye un subset con las variables de interés (Columna 3 a 14)
+
+```{r message=FALSE, warning=FALSE}
+data3.1 <- data3.1[3:14]
+```
+
+### Calculo de cluster
+
+```{r message=FALSE, warning=FALSE}
+resnumclust3.1 <- NbClust(data3.1, distance = "euclidean", min.nc= 2, max.nc= 10, 
+                       method = "ward.D")
+```
+
+### Construimos y observamos el dendograma
+
+```{r message=FALSE, warning=FALSE}
+res3.1 <- hcut(data3.1, k = 2, stand = TRUE, hc_method = "ward.D")
+fviz_dend(res3.1, rect = T, cex = 0.4)
+```
+
+### Graficamos los clusters
+
+```{r message=FALSE, warning=FALSE}
+fviz_cluster(res3.1, data = data3.1)
+```
+
+### Analizamos las caracteristicas de los grupos
+
+```{r message=FALSE, warning=FALSE}
+clust_car=data3.1 %>%
+  mutate(Cluster = res3.1$cluster) %>%
+  group_by(Cluster) %>%
+  summarise_all("mean")
+clust_car
+```
+
+### Resultados
+
+Según este análisis, si construimos los clusters en base a las 12 variables en lugar de los 4 factores, el número ideal de clusters a ser construidos es 2. Sin embargo, desde una perspectiva internacionalista, el dividir a los países en tan solo dos grupos genera una diferencia muy radical entre los países y no refleja la complejidad de la situación real de estos. En cambio, el modelo de 3 clusters, ofrece un mayor rango de clasificaciones de fragilidad y proveerá una comparación más enriquecedora. Así, países con amplias diferencias en sus valores de fragilidad no serán agrupadas en los mismos clusters. Por ejemplo, Somalia y Vietnam, o Hungría y Nueva Zelanda están en el mismo grupo en el modelo de 2 clusters, a pesar de sus amplias diferencias, cosa que no sucede en el modelo de 3 clusters.
+
+En conclusión, nos quedaremos con la propuesta de 3 clusters construidos en base a los factores propuestos por el índice de fragilidad inicial.
+
+
+# Paso 3: Prueba de Anova
+
+El objetivo de realizar una prueba de ANOVA es analizar si en verdad existe alguna diferencia estadísticamente significtiva entre las medias de los tres grupos de países. Por ese motivo, se procede a efecturar una prueba de ANOVA para cada uno de los 4 indices creados.
+
+### a) Prueba de ANOVA para la variable Cohesión
+
+```{r message=FALSE, warning=FALSE}
+Anova1 = aov(data3$Cohesion ~ data3$cluster)
+summary(Anova1)
+```
+
+Como el valor Pr(>F) es menor a 0.05, rechazamos la hipótesis nula. Eso quiere decir que al menos en uno de los tres grupos de países la cohesión es significativamente diferente, en promedio. Procedemos a realizar la TUkey para ver los emparejamientos y saber cuál es diferente.
+
+```{r}
+TukeyHSD(Anova1)
+```
+
+```{r}
+plot(TukeyHSD(Anova1))
+```
+
+Como se puede apreciar en el plot, los tres emparejamientos están alejados del cero. Por tanto, se puede decir con un 95% de confianza que los tres grupos de países tienen diferencias significativas en cuanto a Cohesión.
+
+### b) Prueba de ANOVA para la variable Economía
+
+```{r}
+Anova2 = aov(data3$Economia ~ data3$cluster)
+summary(Anova2)
+```
+
+Como el valor Pr(>F) es menor a 0.05, rechazamos la hipótesis nula. Eso quiere decir que al menos en uno de los tres grupos de países el índice de Economía es significativamente diferente, en promedio. Procedemos a realizar la Tukey para ver los emparejamientos y saber cuál es diferente.
+
+```{r}
+TukeyHSD(Anova2)
+```
+
+```{r}
+plot(TukeyHSD(Anova2))
+```
+
+Como se puede apreciar en el plot, los tres emparejamientos están alejados del cero. Por tanto, se puede decir con un 95% de confianza que los tres grupos de países tienen diferencias significativas en cuanto a Economía.
+
+### c) Prueba de ANOVA para la variable Política
+
+```{r}
+Anova3 = aov(data3$Politica ~ data3$cluster)
+summary(Anova3)
+```
+
+Como el valor Pr(>F) es menor a 0.05, rechazamos la hipótesis nula. Eso quiere decir que al menos en uno de los tres grupos de países el índice de Política es significativamente diferente, en promedio. Procedemos a realizar la Tukey para ver los emparejamientos y saber cuál es diferente.
+
+```{r}
+TukeyHSD(Anova3)
+```
+
+```{r}
+plot(TukeyHSD(Anova3))
+```
+
+Como se puede apreciar en el plot, los tres emparejamientos están alejados del cero. Por tanto, se puede decir con un 95% de confianza que los tres grupos de países tienen diferencias significativas en cuanto a Política.
+
+### d) Prueba de ANOVA para la variable Social
+
+```{r}
+Anova4 = aov(data3$Social ~ data3$cluster)
+summary(Anova4)
+```
+
+Como el valor Pr(>F) es menor a 0.05, rechazamos la hipótesis nula. Eso quiere decir que al menos en uno de los tres grupos de países el aspecto Social es significativamente diferente, en promedio. Procedemos a realizar la Tukey para ver los emparejamientos y saber cuál es diferente.
+
+```{r}
+TukeyHSD(Anova4)
+```
+
+```{r}
+plot(TukeyHSD(Anova4))
+```
+
+Como se puede apreciar en el plot, los tres emparejamientos están alejados del cero(*). Por tanto, se puede decir con un 95% de confianza que los tres grupos de países tienen diferencias significativas en el área Social.
+
+(*)
+
+```{r,echo=FALSE, out.width="50%",fig.align="center"}
+knitr::include_graphics("Gráfico Anova NoSig.png")
+```
+
+
+
+#Ilustración de clusters
+
+A continuación, se buscará reflejar la distribución de países según su nivel de fragilidad estatal construidos en el presente trabajo, visto desde un mapa mundi.
+
+```{r}
+ISODATA = import("https://raw.githubusercontent.com/Gbaldeonb/Estadistica/main/ISODATA.csv")
+```
+
+```{r}
+colnames(ISODATA) = c("name","Country", "iso2", "iso3")
+ISODATA$name=NULL
+ISODATA$iso2=NULL
+#Salvando Namibia
+ISODATA[ISODATA$Country=='Namibia','iso3']= 'NA'
+```
+
+```{r}
+options(timeout = 600)
+mapDIS=sf::read_sf("shapes")
+str(mapDIS)
+#merge iso + variable
+DATAVARIABLEINDICE=inner_join(ISODATA,data3 ,by="Country") 
+#Juntamos información con el shape:
+mapDIS2=merge(mapDIS,DATAVARIABLEINDICE,by.x='iso_3166_1_',by.y='iso3', all.x = T)
+mapDIS2
+```
+
+
+##Coloreamos el mapa anterior según nivel de fragilidad estatal por país
+
+```{r, echo=FALSE}
+mapaleyendaL= ggplot(mapDIS2)+ geom_sf() + theme_light()
+
+mapaleyL= mapaleyendaL + geom_sf(data3=mapDIS2,
+              aes(fill=`Total`),color = "gray")
+      
+mapa= mapaleyL +
+coord_sf() + 
+scale_fill_gradient(low = "seashell",  high = "firebrick", breaks=seq(from=1, to=3, by=1)) + theme_void() + 
+  
+theme(axis.title = element_blank(), axis.text = element_blank(), legend.position = "bottom") + labs(fill=" ") + theme(legend.text = element_text(size = 8)) +
+  
+labs(title = "ÍNDICE DE FRAGILIDAD ESTATAL EN EL MUNDO") +
+  
+theme(
+plot.title = element_text(color="#344D67", size=10, face="bold"))
+
+mapa
+
+```
+
+(*) Groenlandia, Sahara Occidental, región de Kandashar y región de Arunachal Pradesh (en gris) no registraron data.
+
+# Conclusiones
+
+Tras el análisis presentado, podemos concluir que los países se organizan en tres conglomerados: Países con un nivel de fragilidad alto, medio y bajo. Esto está justificado con las pruebas Anova que se han realizado por cada factor y demuestran que hay diferencias estadísticamente significativas entre cada uno de los conglomerados. En el Paso 2 se obtuvo los promedios por factores para cada cluster. No obstante, para simplificar la información, se puede obtener el promedio de los 4 factores por cada cluster. El primer grupo (alto) cuenta con un puntaje promedio de 23.97372 de fragilidad, el segundo grupo (medio) cuenta con un promedio de 17.839156, el tercer grupo (bajo) posee un puntaje promedio de 9.532456 y el promedio general de fragilidad estatal en los 179 países analizados es 16.53. El número de países que conforman el conglomerado con un nivel de fragilidad alto es 39, con un nivel medio, 83, y con un nivel bajo, 57. Como el puntaje va del 0 al 30, se ha encontrado que los dos primeros grupos caen por encima de la media. Asimismo, cabe resaltar que la distancia entre el tercer y segundo grupo es más pronunciada que del segundo al primero. Entonces, por la manera en que se ven organizados, podemos afirmar que sólo una minoría de países -en comparación a los dos primeros grupos- se encuentran por debajo de la media de fragilidad (39).
+
+Este modelo crea la oportunidad para un análisis más profundo y para un planeamiento estratégico por parte de los tomadores de decisiones, políticos e internacionalistas, ya que se esclarece la división entre grupos de países según su fragilidad. Algunos posibles usos de la presente investigación serían una mejor distribución de programas de ayuda para el desarrollo para, así, mejorar (reducir) la fragilidad de los Estados de una manera focalizada.
+
+------
